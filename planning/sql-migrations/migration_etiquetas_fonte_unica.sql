@@ -111,6 +111,12 @@ comment on function public.tg_etiqueta_pericia_agendada() is
   'PERICIA_AGENDADA_INSS/JUDICIAL — direto em clientes_etiquetas (fonte única).';
 
 -- 3) Perícia realizada (rotina diária): PERICIA_AGENDADA_* → AGUARDANDO_RESULTADO.
+--    Só quando a ÚLTIMA perícia do cliente já passou: se há perícia nova
+--    marcada (em qualquer caso dele, ainda não concluída), a etiqueta de
+--    agendada continua. Antes bastava "alguma perícia passou nos últimos 120
+--    dias" — no JSON isso nunca casava (estava desfalcado); lendo
+--    clientes_etiquetas, o 1º run em produção trocaria 5 clientes, um deles com
+--    perícia marcada (revisão do PR #515, 16/11).
 create or replace function public.trocar_etiqueta_pos_pericia()
 returns integer
 language plpgsql
@@ -136,6 +142,15 @@ begin
           where ce.cliente_id = cl.id
             and et.nome in
               ('PERICIA_AGENDADA', 'PERICIA_AGENDADA_INSS', 'PERICIA_AGENDADA_JUDICIAL')
+       )
+       and not exists (
+         select 1
+           from public.agenda_eventos f
+           join public.casos k2 on k2.id = f.caso_id
+          where k2.cliente_id = cl.id
+            and f.tipo = 'pericia'
+            and f.start_at >= now()
+            and f.concluido_em is null
        )
   loop
     delete from public.clientes_etiquetas ce
